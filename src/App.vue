@@ -4,8 +4,8 @@ import TimeSlot from './components/TimeSlot.vue';
 import SpaceBackground from './components/SpaceBackground.vue';
 
 // --- CONFIG ---
-// Pastikan URL ini sudah diganti dengan URL Apps Script terbaru Anda
-const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxALvrA5ahsOCyPBWsd2iW9BB23t5kP_jDaCnmq1hK_v7AdeMKsBwm9rNAvZOtBVl4z/exec'; 
+// URL Apps Script Anda (JANGAN DIGANTI LAGI JIKA SUDAH BENAR)
+const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby22F1DHysYPLR9-n7E6oPWaZ-fr5NE2AmwDJsBu5D7n778aYZTFitCWomT8PucNmiB/exec'; 
 
 // --- DATA & STATE ---
 const slots = ref([]);
@@ -13,9 +13,9 @@ const isModalOpen = ref(false);
 const isProfileOpen = ref(false); 
 const isLoggedIn = ref(false); 
 const isSyncing = ref(false);   
+const isLoading = ref(false); // Indikator loading awal
 const showTimePicker = ref(null);
 
-// Form sekarang punya field 'description'
 const form = ref({ title: '', category: 'work', description: '', startTime: '', endTime: '' });
 
 const currentHourIndex = ref(null);
@@ -62,15 +62,30 @@ const themeStyles = computed(() => {
 });
 
 // --- LOGIC UTAMA ---
+// --- GENERATE SLOTS (CLEAN VERSION) ---
 const generateDailySlots = () => {
   const generated = [];
+  const now = new Date();
+  const currentH = now.getHours();
+  const currentM = now.getMinutes();
+
+  // Generate 24 Jam (48 Slot)
   for (let i = 0; i < 24; i++) {
     const hour = i.toString().padStart(2, '0');
     generated.push({ time: `${hour}:00`, hour: i, minute: 0, activity: null });
     generated.push({ time: `${hour}:30`, hour: i, minute: 30, activity: null });
   }
   slots.value = generated;
-  scrollToNow();
+
+  // Logika Penentuan "NOW"
+  // Jika menit 0-29 -> ikut slot :00
+  // Jika menit 30-59 -> ikut slot :30
+  const idx = generated.findIndex(s => {
+    const targetMinute = currentM < 30 ? 0 : 30;
+    return s.hour === currentH && s.minute === targetMinute;
+  });
+
+  currentHourIndex.value = idx;
 };
 
 const dailyStats = computed(() => {
@@ -85,21 +100,119 @@ const dailyStats = computed(() => {
   return { stats, totalFilled };
 });
 
-// --- SYNC TO GOOGLE SHEETS (AUTO) ---
+// --- HELPER: AMBIL TANGGAL LOKAL (YYYY-MM-DD) ---
+// Ini solusi agar jam 00:03 tidak dianggap kemarin
+const getLocalTodayString = () => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+// --- LOAD DATA (HYBRID: LOCAL FIRST + CLOUD SYNC) ---
+// --- LOAD DATA (FIXED COMPARISON) ---
+const loadFromCloud = async () => {
+  // 1. CEK CACHE
+  const localData = localStorage.getItem('timeblocker_cache');
+  if (localData) {
+    applyDataToSlots(JSON.parse(localData)); 
+  } else {
+    isLoading.value = true;
+  }
+
+  // 2. FETCH CLOUD
+  try {
+    const response = await fetch(GOOGLE_SCRIPT_URL);
+    const data = await response.json();
+    
+    // Update Cache
+    localStorage.setItem('timeblocker_cache', JSON.stringify(data));
+    applyDataToSlots(data);
+    console.log("Cloud sync done.");
+
+  } catch (error) {
+    console.error("Load failed:", error);
+  } finally {
+    isLoading.value = false;
+  }
+};
+
+// --- FUNGSI APPLY DATA (DIPISAH AGAR RAPI) ---
+const applyDataToSlots = (data) => {
+  // Gunakan Helper yang sama
+  const todayStr = getLocalTodayString();
+  console.log("Mencari data untuk tanggal:", todayStr);
+
+  // Filter Data
+  const todaysData = data.filter(item => {
+    // Ambil 10 karakter pertama dari string tanggal di sheet
+    const itemDate = String(item.date).substring(0, 10);
+    return itemDate === todayStr;
+  });
+
+  console.log("Data ditemukan:", todaysData);
+
+  todaysData.forEach(item => {
+    let cleanTime = String(item.time).trim();
+    if (cleanTime.length === 4 && cleanTime.indexOf(':') === 1) cleanTime = '0' + cleanTime;
+    if (cleanTime.length > 5) cleanTime = cleanTime.substring(0, 5);
+
+    // Cari slot
+    const slotIndex = slots.value.findIndex(s => s.time === cleanTime);
+    
+    if (slotIndex !== -1) {
+      slots.value[slotIndex].activity = {
+        title: item.title,
+        category: item.category,
+        description: item.description
+      };
+    } else {
+       // Fuzzy Match Logic
+       const [h, m] = cleanTime.split(':').map(Number);
+       let roundedMinute = (m >= 15 && m < 45) ? '30' : '00';
+       let roundedHour = m >= 45 ? h + 1 : h;
+       let roundedTime = `${String(roundedHour).padStart(2,'0')}:${roundedMinute}`;
+       
+       const fuzzyIndex = slots.value.findIndex(s => s.time === roundedTime);
+       if (fuzzyIndex !== -1) {
+            slots.value[fuzzyIndex].activity = {
+            title: item.title,
+            category: item.category,
+            description: item.description
+           };
+       }
+    }
+  });
+};
+
+// --- SYNC TO CLOUD (REPLACE STRATEGY - FIXED TIMEZONE) ---
 const syncToCloud = async (silent = false) => {
+  // Ganti isSyncing hanya jika ada proses nyata
   const filledSlots = slots.value.filter(s => s.activity);
-  if (filledSlots.length === 0) return;
-
   isSyncing.value = true;
-  const today = new Date().toISOString().split('T')[0];
 
-  const payload = filledSlots.map(slot => ({
-    date: today,
-    time: slot.time,
-    title: slot.activity.title,
-    category: slot.activity.category,
-    description: slot.activity.description || '' // Kirim Keterangan
-  }));
+  // 1. GUNAKAN HELPER (JANGAN PAKAI toISOString)
+  const todayStr = getLocalTodayString(); 
+
+  let payload;
+  
+  if (filledSlots.length === 0) {
+      // Kirim sinyal hapus
+      payload = [{
+          date: todayStr,
+          time: 'DELETE_SIGNAL',
+          title: '', category: '', description: ''
+      }];
+  } else {
+      payload = filledSlots.map(slot => ({
+        date: todayStr,
+        time: slot.time,
+        title: slot.activity.title,
+        category: slot.activity.category,
+        description: slot.activity.description || ''
+    }));
+  }
 
   try {
     await fetch(GOOGLE_SCRIPT_URL, {
@@ -107,7 +220,29 @@ const syncToCloud = async (silent = false) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    if (!silent) console.log("Auto-sync success");
+    
+    // Update Cache Lokal
+    if (filledSlots.length === 0) {
+        const localData = localStorage.getItem('timeblocker_cache');
+        if (localData) {
+            let parsed = JSON.parse(localData);
+            parsed = parsed.filter(item => String(item.date).substring(0, 10) !== todayStr);
+            localStorage.setItem('timeblocker_cache', JSON.stringify(parsed));
+        }
+    } else {
+         // Agar cache update instan tanpa refresh
+         // Kita ambil data lama (selain hari ini) + data baru hari ini
+         const localData = localStorage.getItem('timeblocker_cache');
+         let otherDaysData = [];
+         if (localData) {
+             otherDaysData = JSON.parse(localData).filter(item => String(item.date).substring(0, 10) !== todayStr);
+         }
+         // Gabungkan
+         const newCache = [...otherDaysData, ...payload];
+         localStorage.setItem('timeblocker_cache', JSON.stringify(newCache));
+    }
+    
+    if (!silent) console.log("Auto-sync success (Local Time)");
   } catch (error) {
     console.error("Sync failed", error);
   } finally {
@@ -120,7 +255,6 @@ const add30Minutes = (timeStr) => { if (!timeStr) return '00:00'; if (timeStr ==
 
 const openEditorFromSlot = (index) => { 
   const slot = slots.value[index]; 
-  // Load data termasuk description
   form.value = slot.activity 
     ? { ...slot.activity, startTime: slot.time, endTime: add30Minutes(slot.time) } 
     : { title: '', category: 'work', description: '', startTime: slot.time, endTime: add30Minutes(slot.time) }; 
@@ -135,7 +269,6 @@ const openGlobalEditor = () => {
 
 const selectTimeFromWheel = (type, hour, minute) => { const newTime = `${hour}:${minute}`; if (type === 'start') form.value.startTime = newTime; if (type === 'end') form.value.endTime = newTime; };
 
-// --- FUNGSI SAVE (DENGAN AUTO SYNC) ---
 const saveActivity = () => {
   if (!form.value.title.trim()) return;
   const timeRegex = /^([0-9]{2}):([0-9]{2})$/;
@@ -146,25 +279,21 @@ const saveActivity = () => {
   
   if (startIndex === -1 || endIndex === -1 || startIndex >= endIndex) { alert('Waktu tidak valid!'); return; }
   
-  // Simpan data (Termasuk Description)
   for (let i = startIndex; i < endIndex; i++) {
     slots.value[i].activity = { 
       title: form.value.title, 
       category: form.value.category,
-      description: form.value.description // Simpan Keterangan
+      description: form.value.description 
     };
   }
   isModalOpen.value = false;
-  
-  // AUTO SYNC TRIGGER
-  syncToCloud(true); // true = silent mode (tanpa alert pop-up)
+  syncToCloud(true);
 };
 
 const deleteActivity = () => { 
   let startIndex = slots.value.findIndex(s => s.time === form.value.startTime); 
   if (startIndex !== -1) slots.value[startIndex].activity = null; 
   isModalOpen.value = false; 
-  // Sync juga saat hapus agar update
   syncToCloud(true);
 };
 
@@ -175,6 +304,10 @@ const setTheme = (theme) => { currentTheme.value = theme; };
 let observer = null;
 onMounted(() => { 
   generateDailySlots(); 
+  
+  // Panggil Load Data
+  loadFromCloud();
+
   nextTick(() => {
     scrollToNow();
     const el = document.getElementById('now-indicator');
@@ -189,7 +322,13 @@ onUnmounted(() => { if (observer) observer.disconnect(); });
 
 <template>
   <div :class="['min-h-screen font-sans antialiased transition-colors duration-500 selection:bg-blue-500/30', themeStyles.appBg, themeStyles.textMain]">
-    
+    <div v-if="isLoading" class="fixed top-20 left-0 right-0 z-50 flex justify-center pointer-events-none">
+      <div class="bg-black/80 text-white px-4 py-2 rounded-full text-xs font-bold shadow-xl flex items-center gap-2 backdrop-blur-md border border-white/20">
+        <svg class="animate-spin h-3 w-3 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+        Restoring Data...
+      </div>
+    </div>
+
     <div class="max-w-6xl mx-auto min-h-screen shadow-2xl relative overflow-hidden">
       <SpaceBackground v-if="currentTheme === 'space'" />
 
@@ -214,7 +353,6 @@ onUnmounted(() => { if (observer) observer.disconnect(); });
                     </div>
                   </div>
                   <div class="mb-4"><h4 :class="['text-[10px] font-bold uppercase tracking-wider mb-2', themeStyles.textMuted]">Today's Summary</h4><div class="space-y-2"><div v-for="cat in categories" :key="cat.id" class="flex items-center justify-between text-xs"><div class="flex items-center gap-2"><div :class="['w-1.5 h-1.5 rounded-full', cat.color]"></div><span class="opacity-80">{{ cat.label }}</span></div><span :class="['font-mono font-bold', themeStyles.textMuted]">{{ dailyStats.stats[cat.id] }}h</span></div></div></div>
-                  
                   <div class="pt-2 border-t border-white/10 flex justify-between items-center text-xs">
                     <span :class="themeStyles.textMuted">Status:</span>
                     <span v-if="isSyncing" class="text-emerald-400 animate-pulse font-bold">Syncing...</span>
@@ -300,11 +438,8 @@ onUnmounted(() => { if (observer) observer.disconnect(); });
           <h2 class="text-xl font-black">Edit Schedule</h2>
           <button @click="isModalOpen = false" :class="['p-2 rounded-full transition', currentTheme==='light'?'bg-slate-100 text-slate-500 hover:bg-slate-200':'bg-white/10 text-white/50 hover:text-white hover:bg-white/20']">✕</button>
         </div>
-        
         <input v-model="form.title" type="text" :class="['w-full font-semibold rounded-xl py-4 px-4 mb-4 focus:ring-2 focus:ring-blue-500/50 outline-none transition-colors', themeStyles.inputBg]" placeholder="Activity name..." autofocus>
-        
         <textarea v-model="form.description" rows="2" :class="['w-full text-sm rounded-xl py-3 px-4 mb-6 focus:ring-2 focus:ring-blue-500/50 outline-none resize-none transition-colors', themeStyles.inputBg]" placeholder="Add description / notes..."></textarea>
-
         <div class="flex items-start gap-3 mb-6 relative z-20">
           <div class="flex-1 relative group">
             <label :class="['text-[10px] font-bold uppercase mb-1 block', themeStyles.textMuted]">Start</label>
@@ -346,4 +481,4 @@ onUnmounted(() => { if (observer) observer.disconnect(); });
 .animate-pop-in { animation: pop-in 0.2s ease-out; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-</style>
+</style>```
