@@ -3,24 +3,28 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue';
 import TimeSlot from './components/TimeSlot.vue';
 import SpaceBackground from './components/SpaceBackground.vue';
 
+// --- CONFIG ---
+// Pastikan URL ini sudah diganti dengan URL Apps Script terbaru Anda
+const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxALvrA5ahsOCyPBWsd2iW9BB23t5kP_jDaCnmq1hK_v7AdeMKsBwm9rNAvZOtBVl4z/exec'; 
+
 // --- DATA & STATE ---
 const slots = ref([]);
 const isModalOpen = ref(false);
 const isProfileOpen = ref(false); 
-const isLoggedIn = ref(false);    
+const isLoggedIn = ref(false); 
+const isSyncing = ref(false);   
 const showTimePicker = ref(null);
-const form = ref({ title: '', category: 'work', startTime: '', endTime: '' });
+
+// Form sekarang punya field 'description'
+const form = ref({ title: '', category: 'work', description: '', startTime: '', endTime: '' });
+
 const currentHourIndex = ref(null);
 const isNowInView = ref(true); 
+const currentTheme = ref('dark');
 
-// TEMA (THEME STATE)
-const currentTheme = ref('dark'); // 'dark', 'light', 'space'
-
-// Data Wheel
 const hoursWheel = Array.from({ length: 24 }, (_, i) => i.toString().padStart(2, '0'));
 const minutesWheel = ['00', '30']; 
 
-// Kategori
 const categories = [
   { id: 'work', label: 'Work / Study', color: 'bg-blue-600', border: 'border-blue-500' },
   { id: 'growth', label: 'Growth', color: 'bg-indigo-600', border: 'border-indigo-500' },
@@ -29,46 +33,29 @@ const categories = [
   { id: 'leisure', label: 'Leisure', color: 'bg-amber-600', border: 'border-amber-500' }
 ];
 
-// --- THEME STYLING LOGIC ---
 const themeStyles = computed(() => {
   if (currentTheme.value === 'light') {
     return {
-      appBg: 'bg-slate-50',
-      textMain: 'text-slate-800',
-      textMuted: 'text-slate-500',
-      sidebarBg: 'bg-white border-r border-slate-200',
-      cardBg: 'bg-white border border-slate-200 shadow-sm',
-      menuBg: 'bg-white border border-slate-200 shadow-xl', 
-      headerBg: 'bg-white/90 backdrop-blur-md border-b border-slate-200',
-      inputBg: 'bg-slate-100 border-slate-300 text-slate-800',
-      modalBg: 'bg-white text-slate-800 border-slate-200',
+      appBg: 'bg-slate-50', textMain: 'text-slate-800', textMuted: 'text-slate-500',
+      sidebarBg: 'bg-white border-r border-slate-200', cardBg: 'bg-white border border-slate-200 shadow-sm',
+      menuBg: 'bg-white border border-slate-200 shadow-xl', headerBg: 'bg-white/90 backdrop-blur-md border-b border-slate-200',
+      inputBg: 'bg-slate-100 border-slate-300 text-slate-800', modalBg: 'bg-white text-slate-800 border-slate-200',
       lineColor: 'bg-slate-200'
     };
   } else if (currentTheme.value === 'space') {
     return {
-      appBg: 'text-white bg-black/30', 
-      textMain: 'text-white',
-      textMuted: 'text-blue-200/70',
-      sidebarBg: 'bg-black/20 backdrop-blur-md border-r border-white/10',
-      cardBg: 'bg-black/40 backdrop-blur-md border border-white/10 shadow-2xl',
-      menuBg: 'bg-[#0B0F19] border border-white/20 shadow-2xl shadow-purple-900/20', 
-      headerBg: 'bg-black/40 backdrop-blur-md border-b border-white/10',
-      inputBg: 'bg-white/10 border-white/20 text-white placeholder-white/40',
-      modalBg: 'bg-[#0B0F19] border border-white/10 text-white',
+      appBg: 'text-white bg-black/30', textMain: 'text-white', textMuted: 'text-blue-200/70',
+      sidebarBg: 'bg-black/20 backdrop-blur-md border-r border-white/10', cardBg: 'bg-black/40 backdrop-blur-md border border-white/10 shadow-2xl',
+      menuBg: 'bg-[#0B0F19] border border-white/20 shadow-2xl shadow-purple-900/20', headerBg: 'bg-black/40 backdrop-blur-md border-b border-white/10',
+      inputBg: 'bg-white/10 border-white/20 text-white placeholder-white/40', modalBg: 'bg-[#0B0F19] border border-white/10 text-white',
       lineColor: 'bg-white/10'
     };
   } else {
-    // DARK Mode (Default)
     return {
-      appBg: 'bg-slate-950',
-      textMain: 'text-slate-200',
-      textMuted: 'text-slate-400',
-      sidebarBg: 'bg-slate-900 border-r border-slate-800',
-      cardBg: 'bg-slate-800/50 border border-slate-700/50',
-      menuBg: 'bg-slate-900 border border-slate-700 shadow-xl',
-      headerBg: 'bg-slate-950/90 backdrop-blur-md border-b border-slate-800',
-      inputBg: 'bg-slate-950 border-slate-700 text-white',
-      modalBg: 'bg-slate-900 border-slate-700 text-slate-200',
+      appBg: 'bg-slate-950', textMain: 'text-slate-200', textMuted: 'text-slate-400',
+      sidebarBg: 'bg-slate-900 border-r border-slate-800', cardBg: 'bg-slate-800/50 border border-slate-700/50',
+      menuBg: 'bg-slate-900 border border-slate-700 shadow-xl', headerBg: 'bg-slate-950/90 backdrop-blur-md border-b border-slate-800',
+      inputBg: 'bg-slate-950 border-slate-700 text-white', modalBg: 'bg-slate-900 border-slate-700 text-slate-200',
       lineColor: 'bg-slate-800'
     };
   }
@@ -77,23 +64,13 @@ const themeStyles = computed(() => {
 // --- LOGIC UTAMA ---
 const generateDailySlots = () => {
   const generated = [];
-  const now = new Date();
-  const currentH = now.getHours();
-  const currentM = now.getMinutes();
   for (let i = 0; i < 24; i++) {
     const hour = i.toString().padStart(2, '0');
     generated.push({ time: `${hour}:00`, hour: i, minute: 0, activity: null });
     generated.push({ time: `${hour}:30`, hour: i, minute: 30, activity: null });
   }
-  generated[18].activity = { title: 'Deep Work: Frontend', category: 'work' };
-  generated[19].activity = { title: 'Team Meeting', category: 'work' };
-  generated[24].activity = { title: 'Gym & Lunch', category: 'health' };
   slots.value = generated;
-  const idx = generated.findIndex(s => {
-    if (currentM < 30) return s.hour === currentH && s.minute === 0;
-    return s.hour === currentH && s.minute === 30;
-  });
-  currentHourIndex.value = idx;
+  scrollToNow();
 };
 
 const dailyStats = computed(() => {
@@ -108,13 +85,89 @@ const dailyStats = computed(() => {
   return { stats, totalFilled };
 });
 
+// --- SYNC TO GOOGLE SHEETS (AUTO) ---
+const syncToCloud = async (silent = false) => {
+  const filledSlots = slots.value.filter(s => s.activity);
+  if (filledSlots.length === 0) return;
+
+  isSyncing.value = true;
+  const today = new Date().toISOString().split('T')[0];
+
+  const payload = filledSlots.map(slot => ({
+    date: today,
+    time: slot.time,
+    title: slot.activity.title,
+    category: slot.activity.category,
+    description: slot.activity.description || '' // Kirim Keterangan
+  }));
+
+  try {
+    await fetch(GOOGLE_SCRIPT_URL, {
+      method: "POST", mode: "no-cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!silent) console.log("Auto-sync success");
+  } catch (error) {
+    console.error("Sync failed", error);
+  } finally {
+    isSyncing.value = false;
+  }
+};
+
 const getNearestTime = () => { const now = new Date(); const h = now.getHours().toString().padStart(2, '0'); const m = now.getMinutes() < 30 ? '00' : '30'; return `${h}:${m}`; };
 const add30Minutes = (timeStr) => { if (!timeStr) return '00:00'; if (timeStr === '23:30' || timeStr === '24:00') return '24:00'; const index = slots.value.findIndex(s => s.time === timeStr); return (index !== -1 && index < slots.value.length - 1) ? slots.value[index + 1].time : timeStr; };
-const openEditorFromSlot = (index) => { const slot = slots.value[index]; form.value = slot.activity ? { ...slot.activity, startTime: slot.time, endTime: add30Minutes(slot.time) } : { title: '', category: 'work', startTime: slot.time, endTime: add30Minutes(slot.time) }; isModalOpen.value = true; showTimePicker.value = null; };
-const openGlobalEditor = () => { const nowStr = getNearestTime(); form.value = { title: '', category: 'work', startTime: nowStr, endTime: add30Minutes(nowStr) }; isModalOpen.value = true; showTimePicker.value = null; };
+
+const openEditorFromSlot = (index) => { 
+  const slot = slots.value[index]; 
+  // Load data termasuk description
+  form.value = slot.activity 
+    ? { ...slot.activity, startTime: slot.time, endTime: add30Minutes(slot.time) } 
+    : { title: '', category: 'work', description: '', startTime: slot.time, endTime: add30Minutes(slot.time) }; 
+  isModalOpen.value = true; showTimePicker.value = null; 
+};
+
+const openGlobalEditor = () => { 
+  const nowStr = getNearestTime(); 
+  form.value = { title: '', category: 'work', description: '', startTime: nowStr, endTime: add30Minutes(nowStr) }; 
+  isModalOpen.value = true; showTimePicker.value = null; 
+};
+
 const selectTimeFromWheel = (type, hour, minute) => { const newTime = `${hour}:${minute}`; if (type === 'start') form.value.startTime = newTime; if (type === 'end') form.value.endTime = newTime; };
-const saveActivity = () => { if (!form.value.title.trim()) return; const timeRegex = /^([0-9]{2}):([0-9]{2})$/; if (!timeRegex.test(form.value.startTime) || !timeRegex.test(form.value.endTime)) { alert("Format waktu harus HH:MM"); return; } let startIndex = slots.value.findIndex(s => s.time === form.value.startTime); let endIndex = form.value.endTime === '24:00' ? slots.value.length : slots.value.findIndex(s => s.time === form.value.endTime); if (startIndex === -1 || endIndex === -1 || startIndex >= endIndex) { alert('Waktu tidak valid!'); return; } for (let i = startIndex; i < endIndex; i++) { slots.value[i].activity = { title: form.value.title, category: form.value.category }; } isModalOpen.value = false; };
-const deleteActivity = () => { let startIndex = slots.value.findIndex(s => s.time === form.value.startTime); if (startIndex !== -1) slots.value[startIndex].activity = null; isModalOpen.value = false; };
+
+// --- FUNGSI SAVE (DENGAN AUTO SYNC) ---
+const saveActivity = () => {
+  if (!form.value.title.trim()) return;
+  const timeRegex = /^([0-9]{2}):([0-9]{2})$/;
+  if (!timeRegex.test(form.value.startTime) || !timeRegex.test(form.value.endTime)) { alert("Format waktu harus HH:MM"); return; }
+  
+  let startIndex = slots.value.findIndex(s => s.time === form.value.startTime);
+  let endIndex = form.value.endTime === '24:00' ? slots.value.length : slots.value.findIndex(s => s.time === form.value.endTime);
+  
+  if (startIndex === -1 || endIndex === -1 || startIndex >= endIndex) { alert('Waktu tidak valid!'); return; }
+  
+  // Simpan data (Termasuk Description)
+  for (let i = startIndex; i < endIndex; i++) {
+    slots.value[i].activity = { 
+      title: form.value.title, 
+      category: form.value.category,
+      description: form.value.description // Simpan Keterangan
+    };
+  }
+  isModalOpen.value = false;
+  
+  // AUTO SYNC TRIGGER
+  syncToCloud(true); // true = silent mode (tanpa alert pop-up)
+};
+
+const deleteActivity = () => { 
+  let startIndex = slots.value.findIndex(s => s.time === form.value.startTime); 
+  if (startIndex !== -1) slots.value[startIndex].activity = null; 
+  isModalOpen.value = false; 
+  // Sync juga saat hapus agar update
+  syncToCloud(true);
+};
+
 const scrollToNow = () => { const el = document.getElementById('now-indicator'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); };
 const toggleLogin = () => { isLoggedIn.value = !isLoggedIn.value; };
 const setTheme = (theme) => { currentTheme.value = theme; };
@@ -138,7 +191,6 @@ onUnmounted(() => { if (observer) observer.disconnect(); });
   <div :class="['min-h-screen font-sans antialiased transition-colors duration-500 selection:bg-blue-500/30', themeStyles.appBg, themeStyles.textMain]">
     
     <div class="max-w-6xl mx-auto min-h-screen shadow-2xl relative overflow-hidden">
-      
       <SpaceBackground v-if="currentTheme === 'space'" />
 
       <div class="lg:grid lg:grid-cols-12 h-screen overflow-hidden relative z-10">
@@ -150,6 +202,7 @@ onUnmounted(() => { if (observer) observer.disconnect(); });
                   <img v-if="isLoggedIn" src="https://api.dicebear.com/7.x/avataaars/svg?seed=Felix" alt="User" class="w-full h-full object-cover">
                   <svg v-else xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" :class="['w-8 h-8', themeStyles.textMuted]"><path fill-rule="evenodd" d="M7.5 6a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM3.751 20.105a8.25 8.25 0 0116.498 0 .75.75 0 01-.437.695A18.683 18.683 0 0112 22.5c-2.786 0-5.433-.608-7.812-1.7a.75.75 0 01-.437-.695z" clip-rule="evenodd" /></svg>
                 </button>
+                <div v-if="isSyncing" class="absolute bottom-0 right-0 w-4 h-4 bg-emerald-500 rounded-full border-2 border-slate-900 animate-ping"></div>
                 
                 <div v-if="isProfileOpen" :class="['absolute left-0 top-16 w-72 rounded-2xl p-4 z-50 animate-pop-in origin-top-left transition-colors', themeStyles.menuBg]">
                   <div class="mb-4 pb-4 border-b border-white/10">
@@ -160,12 +213,13 @@ onUnmounted(() => { if (observer) observer.disconnect(); });
                        <button @click="setTheme('space')" :class="['p-2 rounded-lg text-xs font-bold border flex flex-col items-center gap-1 transition', currentTheme==='space' ? 'bg-purple-900 border-purple-500 text-white' : 'bg-transparent border-transparent hover:bg-white/5 opacity-50 hover:opacity-100']"><span>🚀</span> Milky Way</button>
                     </div>
                   </div>
+                  <div class="mb-4"><h4 :class="['text-[10px] font-bold uppercase tracking-wider mb-2', themeStyles.textMuted]">Today's Summary</h4><div class="space-y-2"><div v-for="cat in categories" :key="cat.id" class="flex items-center justify-between text-xs"><div class="flex items-center gap-2"><div :class="['w-1.5 h-1.5 rounded-full', cat.color]"></div><span class="opacity-80">{{ cat.label }}</span></div><span :class="['font-mono font-bold', themeStyles.textMuted]">{{ dailyStats.stats[cat.id] }}h</span></div></div></div>
                   
-                  <div class="mb-4 pb-4 border-b border-white/10">
-                    <div v-if="isLoggedIn"><h3 class="font-bold">Guest User</h3><p :class="['text-xs', themeStyles.textMuted]">guest@example.com</p></div>
-                    <div v-else><p :class="['text-xs mb-3', themeStyles.textMuted]">Sync your data.</p><button @click="toggleLogin" class="w-full py-2 bg-blue-600 text-white font-bold text-sm rounded-lg hover:bg-blue-500 transition">Sign in with Google</button></div>
+                  <div class="pt-2 border-t border-white/10 flex justify-between items-center text-xs">
+                    <span :class="themeStyles.textMuted">Status:</span>
+                    <span v-if="isSyncing" class="text-emerald-400 animate-pulse font-bold">Syncing...</span>
+                    <span v-else class="opacity-50">Auto-Save On</span>
                   </div>
-                  <div class="pt-2"><button v-if="isLoggedIn" @click="toggleLogin" class="w-full text-left text-xs text-red-400 hover:text-red-300 py-1">Log out</button><div v-else :class="['text-[10px] text-center', themeStyles.textMuted]">Local Mode</div></div>
                 </div>
                 <div v-if="isProfileOpen" @click="isProfileOpen = false" class="fixed inset-0 z-40 bg-transparent"></div>
              </div>
@@ -197,6 +251,9 @@ onUnmounted(() => { if (observer) observer.disconnect(); });
                 <img v-if="isLoggedIn" src="https://api.dicebear.com/7.x/avataaars/svg?seed=Felix" alt="User" class="w-full h-full object-cover">
                 <svg v-else xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" :class="['w-5 h-5', themeStyles.textMuted]"><path fill-rule="evenodd" d="M7.5 6a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM3.751 20.105a8.25 8.25 0 0116.498 0 .75.75 0 01-.437.695A18.683 18.683 0 0112 22.5c-2.786 0-5.433-.608-7.812-1.7a.75.75 0 01-.437-.695z" clip-rule="evenodd" /></svg>
               </button>
+              
+              <div v-if="isSyncing" class="absolute top-0 right-0 w-3 h-3 bg-emerald-500 rounded-full border border-slate-900 animate-ping"></div>
+
               <div v-if="isProfileOpen" :class="['absolute right-0 top-12 w-72 rounded-2xl p-4 z-50 animate-pop-in origin-top-right transition-colors', themeStyles.menuBg]">
                  <div class="mb-4 pb-4 border-b border-white/10">
                     <h3 class="font-bold text-sm mb-2 uppercase tracking-wider opacity-50">Appearance</h3>
@@ -207,7 +264,11 @@ onUnmounted(() => { if (observer) observer.disconnect(); });
                     </div>
                   </div>
                   <div class="mb-4"><h4 :class="['text-[10px] font-bold uppercase tracking-wider mb-2', themeStyles.textMuted]">Today's Summary</h4><div class="space-y-2"><div v-for="cat in categories" :key="cat.id" class="flex items-center justify-between text-xs"><div class="flex items-center gap-2"><div :class="['w-1.5 h-1.5 rounded-full', cat.color]"></div><span class="opacity-80">{{ cat.label }}</span></div><span :class="['font-mono font-bold', themeStyles.textMuted]">{{ dailyStats.stats[cat.id] }}h</span></div></div></div>
-                  <div class="pt-2 border-t border-white/10"><button v-if="isLoggedIn" @click="toggleLogin" class="w-full text-left text-xs text-red-400 hover:text-red-300 py-1">Log out</button><div v-else :class="['text-[10px] text-center', themeStyles.textMuted]">Local Mode</div></div>
+                  <div class="pt-2 border-t border-white/10 flex justify-between items-center text-xs">
+                    <span :class="themeStyles.textMuted">Status:</span>
+                    <span v-if="isSyncing" class="text-emerald-400 animate-pulse font-bold">Syncing...</span>
+                    <span v-else class="opacity-50">Auto-Save On</span>
+                  </div>
               </div>
               <div v-if="isProfileOpen" @click="isProfileOpen = false" class="fixed inset-0 z-40 bg-transparent"></div>
             </div>
@@ -222,11 +283,9 @@ onUnmounted(() => { if (observer) observer.disconnect(); });
           </div>
           
           <div class="lg:hidden fixed bottom-6 right-6 flex flex-col items-center gap-3 z-40 group">
-            
             <Transition name="fab-child">
               <button v-if="!isNowInView" @click="scrollToNow" class="w-12 h-12 rounded-full bg-blue-600/80 border border-blue-400/50 text-white shadow-lg backdrop-blur-md flex items-center justify-center active:scale-90" title="Jump to Now"><span class="text-[9px] font-black">NOW</span></button>
             </Transition>
-            
             <button @click="openGlobalEditor" class="w-16 h-16 rounded-full bg-blue-600 text-white shadow-2xl shadow-blue-900/50 flex items-center justify-center border-2 border-white/20 transition z-50">
                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" class="w-8 h-8 transition-transform duration-300" :class="!isNowInView ? 'rotate-90' : ''"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
             </button>
@@ -237,11 +296,15 @@ onUnmounted(() => { if (observer) observer.disconnect(); });
 
     <div v-if="isModalOpen" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
       <div :class="['w-full sm:w-[450px] rounded-3xl shadow-2xl overflow-hidden p-6 animate-slide-up relative border transition-colors', themeStyles.modalBg]">
-        <div class="flex justify-between items-center mb-6">
+        <div class="flex justify-between items-center mb-4">
           <h2 class="text-xl font-black">Edit Schedule</h2>
           <button @click="isModalOpen = false" :class="['p-2 rounded-full transition', currentTheme==='light'?'bg-slate-100 text-slate-500 hover:bg-slate-200':'bg-white/10 text-white/50 hover:text-white hover:bg-white/20']">✕</button>
         </div>
-        <input v-model="form.title" type="text" :class="['w-full font-semibold rounded-xl py-4 px-4 mb-6 focus:ring-2 focus:ring-blue-500/50 outline-none transition-colors', themeStyles.inputBg]" placeholder="Activity name..." autofocus>
+        
+        <input v-model="form.title" type="text" :class="['w-full font-semibold rounded-xl py-4 px-4 mb-4 focus:ring-2 focus:ring-blue-500/50 outline-none transition-colors', themeStyles.inputBg]" placeholder="Activity name..." autofocus>
+        
+        <textarea v-model="form.description" rows="2" :class="['w-full text-sm rounded-xl py-3 px-4 mb-6 focus:ring-2 focus:ring-blue-500/50 outline-none resize-none transition-colors', themeStyles.inputBg]" placeholder="Add description / notes..."></textarea>
+
         <div class="flex items-start gap-3 mb-6 relative z-20">
           <div class="flex-1 relative group">
             <label :class="['text-[10px] font-bold uppercase mb-1 block', themeStyles.textMuted]">Start</label>
@@ -277,30 +340,10 @@ onUnmounted(() => { if (observer) observer.disconnect(); });
 </template>
 
 <style>
-/* CSS UNTUK ANIMASI HALUS TOMBOL DAN POP-UP */
-
-/* Animasi Tombol NOW (Muncul dari belakang +) */
-.fab-child-enter-active,
-.fab-child-leave-active {
-  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-.fab-child-enter-from,
-.fab-child-leave-to {
-  opacity: 0;
-  transform: translateY(40px) scale(0.5); /* Posisi awal/akhir: Turun & Kecil */
-}
-
-/* Animasi Pop-in untuk Menu Dropdown & Modal */
-@keyframes pop-in {
-  from { opacity: 0; transform: scale(0.95); }
-  to { opacity: 1; transform: scale(1); }
-}
-.animate-pop-in {
-  animation: pop-in 0.2s ease-out;
-}
-
-/* Scrollbar Sembunyi untuk Wheel Picker */
+.fab-child-enter-active, .fab-child-leave-active { transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.fab-child-enter-from, .fab-child-leave-to { opacity: 0; transform: translateY(40px) scale(0.5); }
+@keyframes pop-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+.animate-pop-in { animation: pop-in 0.2s ease-out; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 </style>
